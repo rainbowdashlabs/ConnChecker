@@ -7,9 +7,9 @@ import requests
 import speedtest
 
 import database
+from logger import log
 
-logger = logging.getLogger("base")
-
+logger = log("checker")
 
 class Result:
     def __init__(self, success: bool, exception: IOError = None, response: requests.Response = None):
@@ -23,16 +23,17 @@ class Checker:
     disconnected: Union[datetime, None] = None
     last_speed_test: Union[datetime, None] = None
 
-    def __init__(self, db: database.Database, url: str, threads: int = 4, timeout: int = 3):
+    def __init__(self, db: database.Database, url: str, threads: int = 4, timeout: float = 3, interval:int = 5):
         self.threads = threads
         self.url = url
         self.db = db
         self.timeout = timeout
+        self.interval = interval
 
     def start(self):
         while True:
             self.check_url()
-            time.sleep(5)
+            time.sleep(self.interval)
 
     def check_url(self):
         result = self.check(self.url)
@@ -54,40 +55,36 @@ class Checker:
         return Result(response.status_code in success_codes, response=response)
 
     def handle_fail(self, result: Result):
-        global fails, disconnected
-        if disconnected is None:
+        if self.disconnected is None:
             self.db.log_event(database.Events.DISCONNECT)
-        fails += 1
-        disconnected = disconnected or datetime.utcnow()
-        logger.info(f"Fails: {fails}. Last success {disconnected} or {datetime.utcnow() - disconnected}")
+        self.fails += 1
+        disconnected = self.disconnected or datetime.utcnow()
+        logger.info(f"Fails: {self.fails}. Last success {disconnected} or {datetime.utcnow() - disconnected}")
 
     def handle_success(self, result: Result):
-        global disconnected, last_speed_test
         self.db.log_ping(round(result.response.elapsed.microseconds / 1000, 2))
-        if disconnected is None:
+        if self.disconnected is None:
             self.schedule_speed_check()
             return
         self.db.log_event(database.Events.RECONNECT)
-        duration = datetime.utcnow() - disconnected
+        duration = datetime.utcnow() - self.disconnected
         logger.info("Connection is back")
         logger.info(f"Connection was down for {duration}")
         disconnected = None
         self.check_speed()
 
     def schedule_speed_check(self):
-        global last_speed_test
-        if not last_speed_test:
+        if not self.last_speed_test:
             self.check_speed()
             return
-        diff = datetime.utcnow() - last_speed_test
+        diff = datetime.utcnow() - self.last_speed_test
         hours = diff.seconds / 60.0 / 60.0
         if hours >= 1:
             self.check_speed()
 
     def check_speed(self):
-        global last_speed_test
         logger.info("starting speed test")
-        last_speed_test = datetime.utcnow()
+        self.last_speed_test = datetime.utcnow()
         test = speedtest.Speedtest()
         test.get_servers([])
         test.get_best_server()
