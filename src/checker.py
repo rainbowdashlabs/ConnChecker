@@ -1,21 +1,35 @@
-import logging
-import time
+import asyncio
 from datetime import datetime
 from typing import Union
 
-import requests
 import speedtest
+from aiohttp import ClientSession, ClientTimeout, ClientResponse
 
 import database
 from logger import log
 
-logger = log("checker")
+logger = log(__name__)
+
 
 class Result:
-    def __init__(self, success: bool, exception: IOError = None, response: requests.Response = None):
+    def __init__(self, success: bool, exception: Exception = None, response: ClientResponse = None,
+                 duration:float= None):
         self.success = success
         self.exception = exception
         self.response = response
+        self.duration = duration
+
+
+async def check(target: str, success_codes=None) -> Result:
+    if success_codes is None:
+        success_codes = [200]
+    async with ClientSession(timeout=ClientTimeout(total=3)) as session:
+        try:
+            start = asyncio.get_event_loop().time()
+            async with session.get(target) as req:
+                return Result(req.status in success_codes, response=req, duration=asyncio.get_event_loop().time() - start)
+        except Exception as e:
+            return Result(False, exception=e)
 
 
 class Checker:
@@ -23,20 +37,31 @@ class Checker:
     disconnected: Union[datetime, None] = None
     last_speed_test: Union[datetime, None] = None
 
-    def __init__(self, db: database.Database, url: str, threads: int = 4, timeout: float = 3, interval:int = 5):
+    def get_url(self) -> str:
+        self.curr_url += 1
+        return self.urls[self.curr_url % len(self.urls)]
+
+    def __init__(self, db: database.Database, urls: list[str], threads: int = 4, timeout: float = 3, interval: int = 5):
         self.threads = threads
-        self.url = url
+        self.urls = urls
         self.db = db
         self.timeout = timeout
         self.interval = interval
+        self.curr_url = 0
 
     def start(self):
-        while True:
-            self.check_url()
-            time.sleep(self.interval)
+        asyncio.run(self.loop())
 
-    def check_url(self):
-        result = self.check(self.url)
+    async def loop(self):
+        while True:
+            try:
+                await self.check_url()
+            except Exception as e:
+                print(e)
+            await asyncio.sleep(self.interval)
+
+    async def check_url(self):
+        result = await check(self.get_url())
         if result.success:
             self.handle_success(result)
         else:
@@ -45,32 +70,22 @@ class Checker:
                 logger.info(result.exception)
             self.handle_fail(result)
 
-    def check(self, target: str, success_codes=None) -> Result:
-        if success_codes is None:
-            success_codes = [200]
-        try:
-            response = requests.get(target, timeout=3)
-        except requests.RequestException as ex:
-            return Result(False, exception=ex)
-        return Result(response.status_code in success_codes, response=response)
-
     def handle_fail(self, result: Result):
         if self.disconnected is None:
             self.db.log_event(database.Events.DISCONNECT)
         self.fails += 1
-        disconnected = self.disconnected or datetime.utcnow()
-        logger.info(f"Fails: {self.fails}. Last success {disconnected} or {datetime.utcnow() - disconnected}")
+        self.disconnected = self.disconnected or datetime.utcnow()
+        logger.info(f"Fails: {self.fails}. Last success {self.disconnected} or {datetime.utcnow() - self.disconnected}")
 
     def handle_success(self, result: Result):
-        self.db.log_ping(round(result.response.elapsed.microseconds / 1000, 2))
+        self.db.log_ping(round(result.duration, 2))
         if self.disconnected is None:
             self.schedule_speed_check()
             return
         self.db.log_event(database.Events.RECONNECT)
-        duration = datetime.utcnow() - self.disconnected
         logger.info("Connection is back")
-        logger.info(f"Connection was down for {duration}")
-        disconnected = None
+        logger.info(f"Connection was down for {datetime.utcnow() - self.disconnected}")
+        self.disconnected = None
         self.check_speed()
 
     def schedule_speed_check(self):

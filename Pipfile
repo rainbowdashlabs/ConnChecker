@@ -8,6 +8,7 @@ requests = "*"
 speedtest-cli = "*"
 conf = "*"
 pyyaml = "*"
+aiohttp = "*"
 
 [dev-packages]
 
