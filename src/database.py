@@ -1,5 +1,7 @@
 import sqlite3
+from logger import log
 
+log = log(__name__)
 
 class Connection:
     def __init__(self, con: sqlite3.Connection):
@@ -31,6 +33,7 @@ class Events:
 class Database:
     def __init__(self, path: str, timeout: int = 30):
         self.path = path
+        log.info(f"Opening database at {path}")
         self.con = sqlite3.connect(path, timeout=timeout)
 
     def connection(self, timeout: int = 30) -> Connection:

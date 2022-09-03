@@ -24,7 +24,7 @@ interval = int(options.get("interval", 5))
 
 logger.info(f"Url: {urls} | Timeout: {timeout} | Speedtest Threads: {threads}")
 
-db = Database("data.db")
+db = Database("/data.db")
 db.setup()
 
 if __name__ == '__main__':

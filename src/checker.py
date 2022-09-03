@@ -8,7 +8,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientResponse
 import database
 from logger import log
 
-logger = log("checker")
+logger = log(__name__)
 
 
 class Result:
